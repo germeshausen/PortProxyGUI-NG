@@ -6,7 +6,7 @@ namespace PortProxyGUI.Native;
 internal class NativeMethods
 {
     [DllImport("advapi32.dll", EntryPoint = "OpenSCManagerW", ExactSpelling = true, CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern IntPtr OpenSCManager(string machineName, string databaseName, uint dwAccess);
+    internal static extern IntPtr OpenSCManager(string? machineName, string? databaseName, uint dwAccess);
 
     [DllImport("advapi32.dll", EntryPoint = "OpenServiceW", SetLastError = true, CharSet = CharSet.Unicode)]
     internal static extern IntPtr OpenService(IntPtr hSCManager, string lpServiceName, ServiceRights dwDesiredAccess);
@@ -27,6 +27,6 @@ internal class NativeMethods
 
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool StartService(IntPtr hService, int dwNumServiceArgs, string[] lpServiceArgVectors);
+    internal static extern bool StartService(IntPtr hService, int dwNumServiceArgs, string[]? lpServiceArgVectors);
 
 }

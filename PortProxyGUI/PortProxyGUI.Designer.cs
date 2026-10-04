@@ -30,7 +30,7 @@ partial class PortProxyGUI
     {
         components = new System.ComponentModel.Container();
         System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(PortProxyGUI));
-        listViewProxies = new System.Windows.Forms.ListView();
+        listViewProxies = new global::PortProxyGUI.UI.ThemedListView();
         columnHeader1 = new System.Windows.Forms.ColumnHeader();
         columnHeader2 = new System.Windows.Forms.ColumnHeader();
         columnHeader3 = new System.Windows.Forms.ColumnHeader();
@@ -211,11 +211,8 @@ partial class PortProxyGUI
         // 
         // imageListProxies
         // 
-        imageListProxies.ColorDepth = System.Windows.Forms.ColorDepth.Depth8Bit;
-        imageListProxies.ImageStream = (System.Windows.Forms.ImageListStreamer)resources.GetObject("imageListProxies.ImageStream");
+        imageListProxies.ColorDepth = System.Windows.Forms.ColorDepth.Depth32Bit;
         imageListProxies.TransparentColor = System.Drawing.Color.Transparent;
-        imageListProxies.Images.SetKeyName(0, "disable.png");
-        imageListProxies.Images.SetKeyName(1, "enable.png");
         // 
         // saveFileDialog_Export
         // 
@@ -283,7 +280,7 @@ partial class PortProxyGUI
     private System.Windows.Forms.ToolStripMenuItem toolStripMenuItem_Disable;
     private System.Windows.Forms.ToolStripSeparator toolStripSeparator3;
     private System.Windows.Forms.ColumnHeader columnHeader7;
-    internal System.Windows.Forms.ListView listViewProxies;
+    internal global::PortProxyGUI.UI.ThemedListView listViewProxies;
     private System.Windows.Forms.ToolStripMenuItem toolStripMenuItem_FlushDnsCache;
     private System.Windows.Forms.ToolStripMenuItem toolStripMenuItem_More;
     private System.Windows.Forms.ToolStripMenuItem toolStripMenuItem_Export;

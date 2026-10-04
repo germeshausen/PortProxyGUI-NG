@@ -1,50 +1,36 @@
 using PortProxyGUI.Data;
-using System;
-using System.IO;
-using System.Linq;
-using System.Windows.Forms;
 
 namespace PortProxyGUI;
 
-static class Program
+internal static class Program
 {
-    private static string GetPath(params string[] pathes)
-    {
-        if (!pathes.Any()) return string.Empty;
+    public static ApplicationDbScope Database { get; private set; } = null!;
 
-#if NET6_0_OR_GREATER || NET451_OR_GREATER
-        return Path.Combine(pathes);
-#else
-        return pathes.Aggregate(Path.Combine);
-#endif
-    }
-
-    public static ApplicationDbScope Database { get; } = ApplicationDbScope.FromFile(GetPath(
-        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-        "PortProxyGUI",
-        "config.db"
-    ));
-
-    /// <summary>
-    ///  The main entry point for the application.
-    /// </summary>
     [STAThread]
-    static void Main()
+    public static int Main(string[] args)
     {
-        // To customize application configuration such as set high DPI settings or default font,
-        // see https://aka.ms/applicationconfiguration.
-
-#if NET6_0_OR_GREATER
-        ApplicationConfiguration.Initialize();
-#elif NETCOREAPP3_1_OR_GREATER
-        Application.SetHighDpiMode(HighDpiMode.SystemAware);
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-#else
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-#endif
-
-        Application.Run(new PortProxyGUI());
+        var smokeTest = args.Contains("--smoke-test", StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            Database = ApplicationDbScope.OpenShared();
+            ApplicationConfiguration.Initialize();
+            if (smokeTest)
+            {
+                using var window = new PortProxyGUI();
+                return 0;
+            }
+            Application.Run(new PortProxyGUI());
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            if (!smokeTest)
+                MessageBox.Show(ex.Message, $"{AppIdentity.Name} – Startfehler", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return 1;
+        }
+        finally
+        {
+            Database?.Dispose();
+        }
     }
 }

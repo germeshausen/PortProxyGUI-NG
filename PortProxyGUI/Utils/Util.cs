@@ -26,17 +26,21 @@ public static class Util
         foreach (var type in ProxyTypes)
         {
             var keyName = GetKeyName(type);
-            var key = Registry.LocalMachine.OpenSubKey(keyName);
+            using var key = Registry.LocalMachine.OpenSubKey(keyName);
 
             if (key is not null)
             {
                 foreach (var name in key.GetValueNames())
                 {
                     var listenParts = name.Split('/');
+                    if (listenParts.Length != 2) continue;
                     var listenOn = listenParts[0];
                     if (!int.TryParse(listenParts[1], out var listenPort)) continue;
 
-                    var connectParts = key.GetValue(name).ToString().Split('/');
+                    var rawValue = key.GetValue(name)?.ToString();
+                    if (string.IsNullOrWhiteSpace(rawValue)) continue;
+                    var connectParts = rawValue.Split('/');
+                    if (connectParts.Length != 2) continue;
                     var connectTo = connectParts[0];
                     if (!int.TryParse(connectParts[1], out var connectPort)) continue;
 
@@ -61,13 +65,12 @@ public static class Util
         if (!ProxyTypes.Contains(rule.Type)) throw InvalidPortProxyType(rule.Type);
 
         var keyName = GetKeyName(rule.Type);
-        var key = Registry.LocalMachine.OpenSubKey(keyName, true);
         var name = $"{rule.ListenOn}/{rule.ListenPort}";
         var value = $"{rule.ConnectTo}/{rule.ConnectPort}";
 
-        if (key is null) Registry.LocalMachine.CreateSubKey(keyName);
-        key = Registry.LocalMachine.OpenSubKey(keyName, true);
-        key?.SetValue(name, value);
+        using var key = Registry.LocalMachine.CreateSubKey(keyName, true);
+        if (key is null) throw new InvalidOperationException($"Cannot open portproxy registry key: {keyName}");
+        key.SetValue(name, value);
     }
 
     public static void DeleteProxy(Rule rule)
@@ -77,14 +80,11 @@ public static class Util
         if (!ProxyTypes.Contains(rule.Type)) throw InvalidPortProxyType(rule.Type);
 
         var keyName = GetKeyName(rule.Type);
-        var key = Registry.LocalMachine.OpenSubKey(keyName, true);
+        using var key = Registry.LocalMachine.OpenSubKey(keyName, true);
         var name = $"{rule.ListenOn}/{rule.ListenPort}";
 
-        try
-        {
-            key?.DeleteValue(name);
-        }
-        catch { }
+        // Missing rules are harmless, but access/write errors must reach the caller.
+        key?.DeleteValue(name, throwOnMissingValue: false);
     }
 
     public static bool IsServiceRunning()

@@ -338,3 +338,11 @@ ASALocalRun/
 
 # BeatPulse healthcheck temp database
 healthchecksdb
+
+# Local SDK/NuGet caches used by automated builds
+.dotnet-cli/
+.nuget-packages/
+artifacts/
+
+# Shared, reproducible publish profiles (exclude user-specific settings).
+!PortProxyGUI/Properties/PublishProfiles/*.pubxml

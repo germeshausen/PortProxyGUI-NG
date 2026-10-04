@@ -1,6 +1,6 @@
-﻿using NStandard;
 using PortProxyGUI.Data;
 using PortProxyGUI.Utils;
+using PortProxyGUI.UI;
 using System;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -14,20 +14,21 @@ public partial class SetProxy : Form
     private string AutoTypeString { get; }
 
     private bool _updateMode;
-    private ListViewItem _listViewItem;
-    private Rule _itemRule;
+    private ListViewItem? _listViewItem;
+    private Rule? _itemRule;
 
     public SetProxy(PortProxyGUI parent)
     {
         ParentWindow = parent;
 
         InitializeComponent();
+        WindowsTheme.Track(this);
 
         AutoTypeString = comboBox_Type.Text = comboBox_Type.Items.OfType<string>().First();
         var groupNames = (
             from g in parent.listViewProxies.Groups.OfType<ListViewGroup>()
             let header = g.Header
-            where !header.IsNullOrWhiteSpace()
+            where !string.IsNullOrWhiteSpace(header)
             select header
         ).ToArray();
         comboBox_Group.Items.AddRange(groupNames);
@@ -68,7 +69,7 @@ public partial class SetProxy : Form
 
     private bool IsIPv6(string ip)
     {
-        return ip.IsMatch(new Regex(@"^[\dABCDEF]{2}(?::(?:[\dABCDEF]{2})){5}$"));
+        return Regex.IsMatch(ip, @"^[\dABCDEF]{2}(?::(?:[\dABCDEF]{2})){5}$", RegexOptions.IgnoreCase);
     }
 
     private string GetPassType(string listenOn, string connectTo)
@@ -114,7 +115,9 @@ public partial class SetProxy : Form
 
         if (_updateMode)
         {
+            if (_itemRule is null || _listViewItem is null) return;
             var oldRule = Program.Database.GetRule(_itemRule.Type, _itemRule.ListenOn, _itemRule.ListenPort);
+            if (oldRule is null) return;
             Util.DeleteProxy(oldRule);
             Program.Database.Remove(oldRule);
 

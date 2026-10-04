@@ -1,9 +1,7 @@
-﻿using NStandard;
 using PortProxyGUI.Data;
 using PortProxyGUI.UI;
 using PortProxyGUI.Utils;
 using System;
-using System.Data;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -15,15 +13,32 @@ public partial class PortProxyGUI : Form
 {
     private readonly ListViewColumnSorter lvwColumnSorter = new ListViewColumnSorter();
 
-    public SetProxy SetProxyForm;
-    public About AboutForm;
-    private AppConfig AppConfig;
+    public SetProxy? SetProxyForm;
+    public About? AboutForm;
+    private AppConfig AppConfig = new();
+    private readonly ToolStripMenuItem restoreMenuItem = new("Restore (from JSON)");
+    private readonly ToolStripMenuItem skipMenuItem = new("Skip (keep inactive)");
 
     public PortProxyGUI()
     {
         InitializeComponent();
+        Text = AppIdentity.Name;
+        StatusIcons.Populate(imageListProxies, DeviceDpi);
+        DpiChanged += (_, _) => StatusIcons.Populate(imageListProxies, DeviceDpi);
+        listViewProxies.ShowItemToolTips = true;
+        columnHeader1.Text = "Status";
+        contextMenuStrip_RightClick.Items.Insert(2, restoreMenuItem);
+        contextMenuStrip_RightClick.Items.Insert(3, skipMenuItem);
+        restoreMenuItem.Click += (_, _) => EnableSelectedProxies(warningsOnly: true);
+        skipMenuItem.Click += (_, _) => SkipSelectedProxies();
+        contextMenuStrip_RightClick.Opening += (_, _) => UpdateActionAvailability();
+        WindowsTheme.Track(this);
         listViewProxies.ListViewItemSorter = lvwColumnSorter;
+        saveFileDialog_Export.Filter = "JSON configuration (*.json)|*.json";
+        saveFileDialog_Export.DefaultExt = "json";
+        openFileDialog_Import.Filter = "JSON configuration (*.json)|*.json";
     }
+
 
     private void PortProxyGUI_Load(object sender, EventArgs e)
     {
@@ -47,13 +62,14 @@ public partial class PortProxyGUI : Form
 
         if (AppConfig.PortProxyColumnWidths.Length != listViewProxies.Columns.Count)
         {
-            Any.ReDim(ref AppConfig.PortProxyColumnWidths, listViewProxies.Columns.Count);
+            Array.Resize(ref AppConfig.PortProxyColumnWidths, listViewProxies.Columns.Count);
         }
 
-        foreach (var (column, configWidth) in Any.Zip(listViewProxies.Columns.OfType<ColumnHeader>(), AppConfig.PortProxyColumnWidths))
+        foreach (var (column, configWidth) in listViewProxies.Columns.OfType<ColumnHeader>().Zip(AppConfig.PortProxyColumnWidths))
         {
             column.Width = configWidth;
         }
+        columnHeader1.Width = Math.Max(columnHeader1.Width, imageListProxies.ImageSize.Width + 12);
     }
 
     private Data.Rule ParseRule(ListViewItem item)
@@ -66,70 +82,84 @@ public partial class PortProxyGUI : Form
 
         var rule = new Data.Rule
         {
+            Id = item.Tag?.ToString(),
             Type = subItems[1].Text.Trim(),
             ListenOn = subItems[2].Text.Trim(),
             ListenPort = listenPort,
             ConnectTo = subItems[4].Text.Trim(),
             ConnectPort = connectPort,
             Comment = subItems[6].Text.Trim(),
-            Group = item.Group?.Header.Trim(),
+            Group = item.Group?.Header.Trim() ?? "",
         };
         return rule;
     }
 
-    private void EnableSelectedProxies()
+    private void RunSelectedAction(Func<ListViewItem, bool> filter, Action<Data.Rule, RuleStatus> action, bool notifySystem)
     {
-        var items = listViewProxies.SelectedItems.OfType<ListViewItem>();
-        foreach (var item in items)
+        var items = listViewProxies.SelectedItems.OfType<ListViewItem>().Where(filter).ToArray();
+        try
         {
-            item.ImageIndex = 1;
-
-            try
+            foreach (var item in items)
             {
-                var rule = ParseRule(item);
-                Util.AddOrUpdateProxy(rule);
-            }
-            catch (NotSupportedException ex)
-            {
-                MessageBox.Show(ex.Message, "Exclamation", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
-                return;
+                var rule = Program.Database.Rules.FirstOrDefault(rule => rule.Id == item.Tag?.ToString());
+                if (rule is not null) action(rule, (RuleStatus)item.ImageIndex);
             }
         }
-        Util.ParamChange();
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            MessageBox.Show(this, ex.Message, "Rule action failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            if (notifySystem && items.Length > 0)
+            {
+                try { Util.ParamChange(); }
+                catch (InvalidOperationException ex)
+                {
+                    MessageBox.Show(this, ex.Message, "IP Helper notification failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            RefreshProxyList();
+        }
+    }
+
+    private void EnableSelectedProxies(bool warningsOnly = false)
+    {
+        RunSelectedAction(item => item.ImageIndex == (int)(warningsOnly ? RuleStatus.Warning : RuleStatus.Inactive), (rule, _) =>
+        {
+            Util.AddOrUpdateProxy(rule);
+            Program.Database.SetInactive([rule.Id], false);
+        }, notifySystem: true);
     }
 
     private void DisableSelectedProxies()
     {
-        var items = listViewProxies.SelectedItems.OfType<ListViewItem>();
-        foreach (var item in items)
+        RunSelectedAction(item => item.ImageIndex == (int)RuleStatus.Active, (rule, _) =>
         {
-            item.ImageIndex = 0;
+            Util.DeleteProxy(rule);
+            Program.Database.SetInactive([rule.Id], true);
+        }, notifySystem: true);
+    }
 
-            try
-            {
-                var rule = ParseRule(item);
-                Util.DeleteProxy(rule);
-            }
-            catch (NotSupportedException ex)
-            {
-                MessageBox.Show(ex.Message, "Exclamation", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
-                return;
-            }
-        }
-        Util.ParamChange();
+    private void SkipSelectedProxies()
+    {
+        RunSelectedAction(item => item.ImageIndex == (int)RuleStatus.Warning,
+            (rule, _) => Program.Database.SetInactive([rule.Id], true), notifySystem: false);
     }
 
     private void DeleteSelectedProxies()
     {
-        var items = listViewProxies.SelectedItems.OfType<ListViewItem>();
-        DisableSelectedProxies();
-        Program.Database.RemoveRange(items.Select(x => new Data.Rule { Id = x.Tag.ToString() }));
-        foreach (var item in items) listViewProxies.Items.Remove(item);
+        RunSelectedAction(_ => true, (rule, status) =>
+        {
+            if (status == RuleStatus.Active) Util.DeleteProxy(rule);
+            Program.Database.Remove(rule);
+        }, notifySystem: listViewProxies.SelectedItems.OfType<ListViewItem>().Any(item => item.ImageIndex == (int)RuleStatus.Active));
     }
 
     private void SetProxyForUpdate(SetProxy form)
     {
         var item = listViewProxies.SelectedItems.OfType<ListViewItem>().FirstOrDefault();
+        if (item is null) return;
         try
         {
             var rule = ParseRule(item);
@@ -148,7 +178,7 @@ public partial class PortProxyGUI : Form
         var groups = (
             from g in rules.GroupBy(x => x.Group)
             let name = g.Key
-            where !name.IsNullOrWhiteSpace()
+            where !string.IsNullOrWhiteSpace(name)
             orderby name
             select new ListViewGroup(name)
         ).ToArray();
@@ -160,8 +190,7 @@ public partial class PortProxyGUI : Form
         listViewProxies.Items.Clear();
         foreach (var rule in rules)
         {
-            var imageIndex = proxies.Any(p => p.EqualsWithKeys(rule)) ? 1 : 0;
-            var group = listViewProxies.Groups.OfType<ListViewGroup>().FirstOrDefault(x => x.Header == rule.Group);
+            var imageIndex = (int)RuleReconciliation.GetStatus(rule, proxies);
 
             var item = new ListViewItem();
             UpdateListViewItem(item, rule, imageIndex);
@@ -172,6 +201,12 @@ public partial class PortProxyGUI : Form
     public void UpdateListViewItem(ListViewItem item, Data.Rule rule, int imageIndex)
     {
         item.ImageIndex = imageIndex;
+        item.ToolTipText = (RuleStatus)imageIndex switch
+        {
+            RuleStatus.Active => "Active: the rule exists in Windows.",
+            RuleStatus.Inactive => "Inactive: intentionally kept in JSON without a Windows rule.",
+            _ => "Warning: rule is missing in Windows. Choose Delete, Restore or Skip from the context menu."
+        };
         item.Tag = rule.Id;
         item.SubItems.Clear();
         item.SubItems.AddRange(new[]
@@ -184,7 +219,7 @@ public partial class PortProxyGUI : Form
             new ListViewSubItem(item, rule.Comment ?? ""),
         });
 
-        if (rule.Group.IsNullOrWhiteSpace()) item.Group = null;
+        if (string.IsNullOrWhiteSpace(rule.Group)) item.Group = null;
         else
         {
             var group = listViewProxies.Groups.OfType<ListViewGroup>().FirstOrDefault(x => x.Header == rule.Group);
@@ -224,6 +259,10 @@ public partial class PortProxyGUI : Form
 
         // CheckServiceStatus
         toolStripStatusLabel_ServiceNotRunning.Visible = !Util.IsServiceRunning();
+        var warnings = listViewProxies.Items.OfType<ListViewItem>().Count(item => item.ImageIndex == (int)RuleStatus.Warning);
+        toolStripStatusLabel_Status.Text = warnings > 0
+            ? $"{warnings} missing system rule(s): choose Delete, Restore or Skip."
+            : $"{DateTime.Now} : Refreshed.";
     }
 
     private void contextMenuStrip_RightClick_MouseClick(object sender, MouseEventArgs e)
@@ -252,7 +291,6 @@ public partial class PortProxyGUI : Form
 
                 case ToolStripMenuItem item when item == toolStripMenuItem_Refresh:
                     RefreshProxyList();
-                    toolStripStatusLabel_Status.Text = $"{DateTime.Now} : Refreshed.";
                     break;
 
                 case ToolStripMenuItem item when item == toolStripMenuItem_FlushDnsCache:
@@ -278,14 +316,17 @@ public partial class PortProxyGUI : Form
 
     private void listView1_MouseUp(object sender, MouseEventArgs e)
     {
-        if (sender is ListView listView)
-        {
-            toolStripMenuItem_Enable.Enabled = e.Button == MouseButtons.Right && listView.SelectedItems.OfType<ListViewItem>().Any(x => x.ImageIndex == 0);
-            toolStripMenuItem_Disable.Enabled = e.Button == MouseButtons.Right && listView.SelectedItems.OfType<ListViewItem>().Any(x => x.ImageIndex == 1);
+        UpdateActionAvailability();
+    }
 
-            toolStripMenuItem_Delete.Enabled = e.Button == MouseButtons.Right && listView.SelectedItems.OfType<ListViewItem>().Any();
-            toolStripMenuItem_Modify.Enabled = e.Button == MouseButtons.Right && listView.SelectedItems.OfType<ListViewItem>().Count() == 1;
-        }
+    private void UpdateActionAvailability()
+    {
+        var items = listViewProxies.SelectedItems.OfType<ListViewItem>().ToArray();
+        toolStripMenuItem_Enable.Enabled = items.Any(item => item.ImageIndex == (int)RuleStatus.Inactive);
+        toolStripMenuItem_Disable.Enabled = items.Any(item => item.ImageIndex == (int)RuleStatus.Active);
+        restoreMenuItem.Enabled = skipMenuItem.Enabled = items.Any(item => item.ImageIndex == (int)RuleStatus.Warning);
+        toolStripMenuItem_Delete.Enabled = items.Length > 0;
+        toolStripMenuItem_Modify.Enabled = items.Length == 1;
     }
 
     private void listView1_DoubleClick(object sender, EventArgs e)

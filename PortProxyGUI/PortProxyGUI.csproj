@@ -1,45 +1,24 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
-
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFrameworks>net8.0-windows;net6.0-windows;net35;net451</TargetFrameworks>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Authors>zmjack</Authors>
-    <Company>nstandard.net</Company>
-    <Description>A manager of the netsh interface portproxy which is to evaluate TCP/IP port redirect on windows.</Description>
-    <PackageProjectUrl>https://github.com/zmjack/PortProxyGUI</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/zmjack/PortProxyGUI</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
-    <PackageTags>portproxy TCP/IP redirector</PackageTags>
-    <PackageLicenseFile>LICENSE.md</PackageLicenseFile>
-    <Copyright>Copyright © nstandard.net 2020</Copyright>
-    <Version>1.4.2</Version>
     <ApplicationIcon>icon.ico</ApplicationIcon>
-    <ApplicationDefaultFont>Arial, 8.25pt</ApplicationDefaultFont>
     <AssemblyName>PPGUI</AssemblyName>
-    <LangVersion>preview</LangVersion>
+    <RootNamespace>PortProxyGUI</RootNamespace>
+    <Version>2.0.0</Version>
+    <Product>PortProxyGUI NG</Product>
+    <AssemblyTitle>PortProxyGUI NG</AssemblyTitle>
+    <Authors>zmjack;germeshausen</Authors>
+    <Company>germeshausen</Company>
+    <Description>A .NET 10 Windows port proxy manager, based on PortProxyGUI by zmjack and extended by germeshausen.</Description>
+    <RepositoryUrl>https://github.com/germeshausen/PortProxyGUI-NG</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/germeshausen/PortProxyGUI-NG</PackageProjectUrl>
+    <Copyright>Original work Copyright (c) 2019 zmjack. Fork modifications Copyright (c) 2026 germeshausen.</Copyright>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <DebugSymbols Condition="'$(Configuration)' == 'Release'">false</DebugSymbols>
   </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <DebugType>none</DebugType>
-    <DebugSymbols>false</DebugSymbols>
-    <PlatformTarget>AnyCPU</PlatformTarget>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <PlatformTarget>AnyCPU</PlatformTarget>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <None Include="..\LICENSE.md">
-      <Pack>True</Pack>
-      <PackagePath></PackagePath>
-    </None>
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="SQLib.Sqlite" Version="0.11.0" />
-  </ItemGroup>
-
 </Project>

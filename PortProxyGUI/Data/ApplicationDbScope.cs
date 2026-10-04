@@ -1,112 +1,196 @@
-﻿using NStandard;
-using SQLib.Sqlite;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+using System.Text.Json;
 
 namespace PortProxyGUI.Data;
 
-public class ApplicationDbScope : SqliteScope<ApplicationDbScope>
+public sealed class ApplicationDbScope : IDisposable
 {
-    public static readonly string AppDbDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PortProxyGUI");
-    public static readonly string AppDbFile = Path.Combine(AppDbDirectory, "config.db");
+    public static readonly string AppDbDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PortProxyGUI");
+    public static readonly string AppDbFile = Path.Combine(AppDbDirectory, "config.json");
+    public static readonly string LockFile = Path.Combine(AppDbDirectory, "portproxy.lock");
 
-    public static ApplicationDbScope FromFile(string file)
+    private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        var dir = Path.GetDirectoryName(file);
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        WriteIndented = true
+    };
 
-        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-        if (!File.Exists(file))
+    private readonly string _file;
+    private readonly bool _readOnly;
+    private readonly FileStream? _lockStream;
+    private ConfigurationDocument _document;
+
+    public IEnumerable<Rule> Rules => _document.Rules;
+
+    private ApplicationDbScope(string file, bool readOnly, FileStream? lockStream)
+    {
+        _file = file;
+        _readOnly = readOnly;
+        _lockStream = lockStream;
+        _document = Load(file);
+    }
+
+    public static ApplicationDbScope OpenShared()
+    {
+        Directory.CreateDirectory(AppDbDirectory);
+        FileStream lockStream;
+        try
         {
-#if NETCOREAPP3_0_OR_GREATER
-#else
-            System.Data.SQLite.SQLiteConnection.CreateFile(file);
-#endif
+            lockStream = new FileStream(LockFile, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            lockStream.Lock(0, 1);
+        }
+        catch (IOException ex)
+        {
+            throw new InvalidOperationException($"{AppIdentity.Name} wird bereits in einer anderen Windows-Sitzung ausgeführt.", ex);
         }
 
-        var scope = new ApplicationDbScope($"Data Source=\"{file}\"");
-        scope.Migrate();
-        return scope;
+        return new ApplicationDbScope(AppDbFile, false, lockStream);
     }
 
-    public ApplicationDbScope(string connectionString) : base(connectionString)
-    {
-    }
+    public static ApplicationDbScope FromFile(string file) => new(file, true, null);
 
-    public override void Initialize()
-    {
-    }
-
-    public void Migrate() => new MigrationUtil(this).MigrateToLast();
-
-    public Migration GetLastMigration()
-    {
-        return SqlQuery<Migration>($"SELECT * FROM __history ORDER BY MigrationId DESC LIMIT 1;").First();
-    }
-
-    public IEnumerable<Rule> Rules => SqlQuery<Rule>($"SELECT * FROM Rules;");
-
-    public Rule GetRule(string type, string listenOn, int listenPort)
-    {
-        return SqlQuery<Rule>($"SELECT * FROM Rules WHERE Type={type} AND ListenOn={listenOn} AND ListenPort={listenPort} LIMIT 1;").FirstOrDefault();
-    }
+    public Rule? GetRule(string type, string listenOn, int listenPort) =>
+        _document.Rules.FirstOrDefault(x => x.Type == type && x.ListenOn == listenOn && x.ListenPort == listenPort);
 
     public void Add<T>(T obj) where T : class
     {
-        var newid = Guid.NewGuid().ToString();
-        if (obj is Rule rule)
-        {
-            Sql($"INSERT INTO Rules (Id, Type, ListenOn, ListenPort, ConnectTo, ConnectPort, Comment, `Group`) VALUES ({newid}, {rule.Type}, {rule.ListenOn}, {rule.ListenPort}, {rule.ConnectTo}, {rule.ConnectPort}, {rule.Comment ?? ""}, {rule.Group ?? ""});");
-            rule.Id = newid;
-        }
-        else throw new NotSupportedException($"Adding {obj.GetType().FullName} is not supported.");
+        if (obj is not Rule rule) throw new NotSupportedException($"Adding {obj.GetType().FullName} is not supported.");
+        if (GetRule(rule.Type, rule.ListenOn, rule.ListenPort) is not null)
+            throw new InvalidOperationException("Eine Regel mit diesem Typ, dieser Adresse und diesem Port existiert bereits.");
+        rule.Id = Guid.NewGuid().ToString();
+        _document.Rules.Add(rule);
+        Save();
     }
+
     public void AddRange<T>(IEnumerable<T> objs) where T : class
     {
-        foreach (var obj in objs) Add(obj);
+        foreach (var obj in objs)
+        {
+            if (obj is not Rule rule) throw new NotSupportedException($"Adding {obj.GetType().FullName} is not supported.");
+            if (GetRule(rule.Type, rule.ListenOn, rule.ListenPort) is not null) continue;
+            rule.Id = Guid.NewGuid().ToString();
+            _document.Rules.Add(rule);
+        }
+        Save();
     }
 
     public void Update<T>(T obj) where T : class
     {
-        if (obj is Rule rule)
-        {
-            Sql($"UPDATE Rules SET Type={rule.Type}, ListenOn={rule.ListenOn}, ListenPort={rule.ListenPort}, ConnectTo={rule.ConnectTo}, ConnectPort={rule.ConnectPort} WHERE Id={rule.Id};");
-        }
-        else throw new NotSupportedException($"Updating {obj.GetType().FullName} is not supported.");
+        if (obj is not Rule rule) throw new NotSupportedException($"Updating {obj.GetType().FullName} is not supported.");
+        var existing = _document.Rules.FirstOrDefault(x => x.Id == rule.Id);
+        if (existing is null) return;
+        existing.Type = rule.Type;
+        existing.ListenOn = rule.ListenOn;
+        existing.ListenPort = rule.ListenPort;
+        existing.ConnectTo = rule.ConnectTo;
+        existing.ConnectPort = rule.ConnectPort;
+        existing.IsInactive = rule.IsInactive;
+        Save();
     }
+
     public void UpdateRange<T>(IEnumerable<T> objs) where T : class
     {
-        foreach (var obj in objs) Update(obj);
+        foreach (var obj in objs)
+        {
+            if (obj is not Rule rule) continue;
+            var existing = _document.Rules.FirstOrDefault(x => x.Id == rule.Id);
+            if (existing is null) continue;
+            existing.Type = rule.Type;
+            existing.ListenOn = rule.ListenOn;
+            existing.ListenPort = rule.ListenPort;
+            existing.ConnectTo = rule.ConnectTo;
+            existing.ConnectPort = rule.ConnectPort;
+            existing.IsInactive = rule.IsInactive;
+        }
+        Save();
     }
 
     public void Remove<T>(T obj) where T : class
     {
-        if (obj is Rule rule)
-        {
-            Sql($"DELETE FROM Rules WHERE Id={rule.Id};");
-        }
-        else throw new NotSupportedException($"Removing {obj.GetType().FullName} is not supported.");
+        if (obj is not Rule rule) throw new NotSupportedException($"Removing {obj.GetType().FullName} is not supported.");
+        _document.Rules.RemoveAll(x => x.Id == rule.Id);
+        Save();
     }
+
+    public void SetInactive(IEnumerable<string?> ids, bool inactive)
+    {
+        var selectedIds = ids.Where(id => id is not null).ToHashSet();
+        foreach (var rule in _document.Rules.Where(rule => selectedIds.Contains(rule.Id)))
+            rule.IsInactive = inactive;
+        Save();
+    }
+
     public void RemoveRange<T>(IEnumerable<T> objs) where T : class
     {
-        foreach (var obj in objs) Remove(obj);
+        var ids = objs.OfType<Rule>().Select(x => x.Id).ToHashSet();
+        _document.Rules.RemoveAll(x => ids.Contains(x.Id));
+        Save();
     }
 
-    public AppConfig GetAppConfig()
+    public AppConfig GetAppConfig() => new()
     {
-        var configRows = SqlQuery<Config>($"SELECT * FROM Configs;");
-        var appConfig = new AppConfig(configRows);
-        return appConfig;
-    }
+        MainWindowSize = new System.Drawing.Size(_document.Window.Width, _document.Window.Height),
+        PortProxyColumnWidths = _document.Window.ColumnWidths
+    };
 
-    public void SaveAppConfig(AppConfig appConfig)
+    public void SaveAppConfig(AppConfig config)
     {
-        Sql($"UPDATE Configs SET Value = {appConfig.MainWindowSize.Width} WHERE Item = 'MainWindow' AND `Key` = 'Width';");
-        Sql($"UPDATE Configs SET Value = {appConfig.MainWindowSize.Height} WHERE Item = 'MainWindow' AND `Key` = 'Height';");
-
-        var s_portProxyColumnWidths = $"[{appConfig.PortProxyColumnWidths.Select(x => x.ToString()).Join(", ")}]";
-        Sql($"UPDATE Configs SET Value = {s_portProxyColumnWidths} WHERE Item = 'PortProxy' AND `Key` = 'ColumnWidths';");
+        _document.Window.Width = config.MainWindowSize.Width;
+        _document.Window.Height = config.MainWindowSize.Height;
+        _document.Window.ColumnWidths = config.PortProxyColumnWidths;
+        Save();
     }
 
+    private static ConfigurationDocument Load(string file)
+    {
+        if (!File.Exists(file)) return new ConfigurationDocument();
+        try
+        {
+            return JsonSerializer.Deserialize<ConfigurationDocument>(File.ReadAllText(file), JsonOptions) ?? new ConfigurationDocument();
+        }
+        catch (JsonException) when (File.Exists(file + ".bak"))
+        {
+            return JsonSerializer.Deserialize<ConfigurationDocument>(File.ReadAllText(file + ".bak"), JsonOptions) ?? new ConfigurationDocument();
+        }
+    }
+
+    private void Save()
+    {
+        if (_readOnly) return;
+        var temporaryFile = _file + ".tmp";
+        var json = JsonSerializer.Serialize(_document, JsonOptions);
+        using (var stream = new FileStream(temporaryFile, FileMode.Create, FileAccess.Write, FileShare.None))
+        using (var writer = new StreamWriter(stream))
+        {
+            writer.Write(json);
+            writer.Flush();
+            stream.Flush(true);
+        }
+
+        if (File.Exists(_file)) File.Replace(temporaryFile, _file, _file + ".bak", true);
+        else File.Move(temporaryFile, _file);
+    }
+
+    public void Dispose()
+    {
+        if (_lockStream is not null)
+        {
+            try { _lockStream.Unlock(0, 1); } catch (IOException) { }
+            _lockStream.Dispose();
+        }
+    }
+
+    private sealed class ConfigurationDocument
+    {
+        public int Version { get; set; } = 1;
+        public List<Rule> Rules { get; set; } = [];
+        public WindowConfiguration Window { get; set; } = new();
+    }
+
+    private sealed class WindowConfiguration
+    {
+        public int Width { get; set; } = 720;
+        public int Height { get; set; } = 500;
+        public int[] ColumnWidths { get; set; } = [24, 64, 140, 100, 140, 100, 100];
+    }
 }
